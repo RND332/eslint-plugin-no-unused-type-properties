@@ -1,10 +1,41 @@
 import { AST_NODE_TYPES, TSESTree } from '@typescript-eslint/types';
-import { createRule } from '../utils/create-rule'; // assuming this is ESLintUtils.RuleCreator wrapped
+import type { ESLint } from 'eslint';
 
 type MessageIds = 'unusedProperties';
 
-export const noUnusedTypePropertiesRule = createRule<[], MessageIds>({
-  name: 'no-unused-type-properties', // optional but recommended
+type PluginRule = NonNullable<ESLint.Plugin['rules']>[string];
+
+function isObjectPattern(node: unknown): node is TSESTree.ObjectPattern {
+  return !!node && typeof node === 'object' && 'type' in node && node.type === AST_NODE_TYPES.ObjectPattern;
+}
+
+function isProperty(
+  prop: TSESTree.Property | TSESTree.RestElement,
+): prop is TSESTree.Property {
+  return prop.type === AST_NODE_TYPES.Property;
+}
+
+function isExportNamedDeclaration(node: unknown): node is TSESTree.ExportNamedDeclaration {
+  return !!node && typeof node === 'object' && 'type' in node && node.type === AST_NODE_TYPES.ExportNamedDeclaration;
+}
+
+function isNamedTypeDeclaration(
+  node: unknown,
+): node is TSESTree.TSTypeAliasDeclaration | TSESTree.TSInterfaceDeclaration {
+  return (
+    !!node
+    && typeof node === 'object'
+    && 'type' in node
+    && (node.type === AST_NODE_TYPES.TSTypeAliasDeclaration
+      || node.type === AST_NODE_TYPES.TSInterfaceDeclaration)
+  );
+}
+
+function isProgram(node: unknown): node is TSESTree.Program {
+  return !!node && typeof node === 'object' && 'type' in node && node.type === AST_NODE_TYPES.Program;
+}
+
+export const noUnusedTypePropertiesRule: PluginRule = {
   meta: {
     type: 'problem',
     docs: {
@@ -21,44 +52,32 @@ export const noUnusedTypePropertiesRule = createRule<[], MessageIds>({
   },
 
   create(context) {
-    // No need for explicit Readonly<…> — generics infer it correctly
-
     const sourceCode = context.sourceCode;
+    const ast = sourceCode.ast;
 
-    function isProperty(
-      prop: TSESTree.Property | TSESTree.RestElement,
-    ): prop is TSESTree.Property {
-      return prop.type === AST_NODE_TYPES.Property;
+    if (!isProgram(ast)) {
+      return {};
     }
+
+    const program: TSESTree.Program = ast;
 
     function findTypeDeclaration(
       typeName: string,
     ): TSESTree.TSTypeAliasDeclaration | TSESTree.TSInterfaceDeclaration | undefined {
-      for (const stmt of sourceCode.ast.body) {
-        let decl: TSESTree.Node | undefined;
-
-        if (stmt.type === AST_NODE_TYPES.ExportNamedDeclaration && stmt.declaration) {
-          decl = stmt.declaration;
-        } else {
-          decl = stmt;
-        }
+      for (const statement of program.body) {
+        const declaration = isExportNamedDeclaration(statement) && statement.declaration
+          ? statement.declaration
+          : statement;
 
         if (
-          decl.type === AST_NODE_TYPES.TSTypeAliasDeclaration &&
-          decl.id.type === AST_NODE_TYPES.Identifier &&
-          decl.id.name === typeName
+          isNamedTypeDeclaration(declaration)
+          && declaration.id.type === AST_NODE_TYPES.Identifier
+          && declaration.id.name === typeName
         ) {
-          return decl;
-        }
-
-        if (
-          decl.type === AST_NODE_TYPES.TSInterfaceDeclaration &&
-          decl.id.type === AST_NODE_TYPES.Identifier &&
-          decl.id.name === typeName
-        ) {
-          return decl;
+          return declaration;
         }
       }
+
       return undefined;
     }
 
@@ -67,7 +86,6 @@ export const noUnusedTypePropertiesRule = createRule<[], MessageIds>({
       typeAnnotation: TSESTree.TSTypeAnnotation,
       typeName: string,
     ): void {
-      // Skip if rest element (...rest) is present — assumes it can catch anything
       if (objectPattern.properties.some(p => p.type === AST_NODE_TYPES.RestElement)) {
         return;
       }
@@ -106,9 +124,7 @@ export const noUnusedTypePropertiesRule = createRule<[], MessageIds>({
 
         const propName = member.key.name;
 
-        // Skip if already destructured
         if (destructuredKeys.has(propName)) {
-          // Optional: recurse into nested patterns
           const matchingProp = objectPattern.properties.find(
             p =>
               isProperty(p) &&
@@ -131,11 +147,8 @@ export const noUnusedTypePropertiesRule = createRule<[], MessageIds>({
           continue;
         }
 
-        // Report the unused property
         context.report({
           node: objectPattern,
-          // Better: point roughly at the parameter location
-          // Could be improved further by locating the type reference node
           messageId: 'unusedProperties',
           data: {
             propertyName: propName,
@@ -145,9 +158,10 @@ export const noUnusedTypePropertiesRule = createRule<[], MessageIds>({
       }
     }
 
-    function checkParameter(param: TSESTree.Parameter): void {
-      if (param.type !== AST_NODE_TYPES.ObjectPattern) return;
-      if (!param.typeAnnotation) return;
+    function checkParameter(param: unknown): void {
+      if (!isObjectPattern(param) || !param.typeAnnotation) {
+        return;
+      }
 
       const typeAnn = param.typeAnnotation;
 
@@ -173,7 +187,6 @@ export const noUnusedTypePropertiesRule = createRule<[], MessageIds>({
       FunctionExpression(node) {
         node.params.forEach(checkParameter);
       },
-      // Optional: add ObjectMethod, etc. if you want method params too
     };
   },
-});
+};

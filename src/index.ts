@@ -1,23 +1,16 @@
-import { noUnusedTypePropertiesRule } from './rules/no-unused-type-properties'
+import { ESLint } from 'eslint'
+import { noUnusedTypePropertiesRule } from './rules/no-unused-type-properties.js'
 
-export const rules = {
+export const rules: NonNullable<ESLint.Plugin['rules']> = {
   'no-unused-type-properties': noUnusedTypePropertiesRule,
 }
 
-const plugin = {
+const plugin: ESLint.Plugin = {
   meta: {
-    name: 'eslint-plugin-unused-type-properties',
-    version: '1.0.0',
+    name: 'eslint-plugin-no-unused-type-properties',
+    version: '0.1.1',
   },
-  rules: {
-    'no-unused-type-properties': noUnusedTypePropertiesRule, 
-  }
-} satisfies {
-  meta: {
-    name: string
-    version: string
-  }
-  rules: Record<string, typeof noUnusedTypePropertiesRule>
+  rules,
 }
 
 export default plugin

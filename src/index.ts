@@ -8,7 +8,7 @@ export const rules: NonNullable<ESLint.Plugin['rules']> = {
 const plugin: ESLint.Plugin = {
   meta: {
     name: 'eslint-plugin-no-unused-type-properties',
-    version: '0.1.1',
+    version: '0.1.2',
   },
   rules,
 }

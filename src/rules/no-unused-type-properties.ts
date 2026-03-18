@@ -1,194 +1,179 @@
-/* eslint-disable unicorn/no-array-callback-reference */
-import { AST_NODE_TYPES, TSESTree } from '@typescript-eslint/types'
-import type { TSESLint } from '@typescript-eslint/utils'
-import { createRule } from '../utils/create-rule'
+import { AST_NODE_TYPES, TSESTree } from '@typescript-eslint/types';
+import { createRule } from '../utils/create-rule'; // assuming this is ESLintUtils.RuleCreator wrapped
 
-type MessageIds = 'unusedProperties'
-
-function isProperty(
-  property: TSESTree.Property | TSESTree.RestElement,
-): property is TSESTree.Property {
-  return property.type === AST_NODE_TYPES.Property
-}
-
-function isObjectPattern(param: TSESTree.Parameter): param is TSESTree.ObjectPattern {
-  return param.type === AST_NODE_TYPES.ObjectPattern
-}
-
-function isTypeAliasDeclaration(
-  item: TSESTree.ProgramStatement,
-): item is TSESTree.TSTypeAliasDeclaration {
-  return item.type === AST_NODE_TYPES.TSTypeAliasDeclaration
-}
-
-function getTypeAliasDeclaration(
-  item: TSESTree.ProgramStatement,
-): TSESTree.TSTypeAliasDeclaration | undefined {
-  if (isTypeAliasDeclaration(item)) {
-    return item
-  }
-
-  if (
-    item.type === AST_NODE_TYPES.ExportNamedDeclaration &&
-    item.declaration &&
-    item.declaration.type === AST_NODE_TYPES.TSTypeAliasDeclaration
-  ) {
-    return item.declaration
-  }
-
-  return undefined
-}
-
-function isInterfaceDeclaration(
-  item: TSESTree.ProgramStatement,
-): item is TSESTree.TSInterfaceDeclaration {
-  return item.type === AST_NODE_TYPES.TSInterfaceDeclaration
-}
-
-function getInterfaceDeclaration(
-  item: TSESTree.ProgramStatement,
-): TSESTree.TSInterfaceDeclaration | undefined {
-  if (isInterfaceDeclaration(item)) {
-    return item
-  }
-
-  if (
-    item.type === AST_NODE_TYPES.ExportNamedDeclaration &&
-    item.declaration &&
-    item.declaration.type === AST_NODE_TYPES.TSInterfaceDeclaration
-  ) {
-    return item.declaration
-  }
-
-  return undefined
-}
+type MessageIds = 'unusedProperties';
 
 export const noUnusedTypePropertiesRule = createRule<[], MessageIds>({
-  name: 'no-unused-type-properties',
+  name: 'no-unused-type-properties', // optional but recommended
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallows unused type properties for destructured function arguments',
-      recommended: false,
-      requiresTypeChecking: false,
-    },
-    messages: {
-      unusedProperties:
-        "Property '{{propertyName}}' is defined in type '{{typeName}}' but is not used in the destructuring. Remove it or use Omit<{{typeName}}, '{{propertyName}}'> to explicitly exclude it.",
+      description:
+        'Disallows unused properties in destructured function parameters typed with interfaces or type aliases',
+      url: 'https://typescript-eslint.io/rules/no-unused-type-properties',
     },
     schema: [],
+    messages: {
+      unusedProperties:
+        "Property '{{propertyName}}' is defined in type '{{typeName}}' but is not used in the destructuring. " +
+        'Remove it from the destructuring pattern or use Omit<{{typeName}}, "{{propertyName}}"> to explicitly exclude it.',
+    },
   },
-  defaultOptions: [],
 
-  create(context: Readonly<TSESLint.RuleContext<MessageIds, []>>) {
-    const checkIfPropertyIsPresent =
-      (objectPattern: TSESTree.ObjectPattern, typeName: string) =>
-      (typeProperty: TSESTree.TypeElement): void => {
-        if (typeProperty.type !== AST_NODE_TYPES.TSPropertySignature) {
-          return
+  create(context) {
+    // No need for explicit Readonly<…> — generics infer it correctly
+
+    const sourceCode = context.sourceCode;
+
+    function isProperty(
+      prop: TSESTree.Property | TSESTree.RestElement,
+    ): prop is TSESTree.Property {
+      return prop.type === AST_NODE_TYPES.Property;
+    }
+
+    function findTypeDeclaration(
+      typeName: string,
+    ): TSESTree.TSTypeAliasDeclaration | TSESTree.TSInterfaceDeclaration | undefined {
+      for (const stmt of sourceCode.ast.body) {
+        let decl: TSESTree.Node | undefined;
+
+        if (stmt.type === AST_NODE_TYPES.ExportNamedDeclaration && stmt.declaration) {
+          decl = stmt.declaration;
+        } else {
+          decl = stmt;
         }
 
-        if (typeProperty.key.type !== AST_NODE_TYPES.Identifier) {
-          return
+        if (
+          decl.type === AST_NODE_TYPES.TSTypeAliasDeclaration &&
+          decl.id.type === AST_NODE_TYPES.Identifier &&
+          decl.id.name === typeName
+        ) {
+          return decl;
         }
 
-        const propertyName = typeProperty.key.name
-        const properties = objectPattern.properties.filter(isProperty)
-
-        const property = properties.find(
-          property =>
-            property.key.type === AST_NODE_TYPES.Identifier && property.key.name === propertyName,
-        )
-        if (!property) {
-          context.report({
-            node: objectPattern,
-            messageId: 'unusedProperties',
-            data: {
-              propertyName,
-              typeName,
-            },
-          })
-          return
-        }
-
-        if (typeProperty.typeAnnotation && property.value.type === AST_NODE_TYPES.ObjectPattern) {
-          recursiveCheck(property.value, typeProperty.typeAnnotation)
+        if (
+          decl.type === AST_NODE_TYPES.TSInterfaceDeclaration &&
+          decl.id.type === AST_NODE_TYPES.Identifier &&
+          decl.id.name === typeName
+        ) {
+          return decl;
         }
       }
+      return undefined;
+    }
 
-    const recursiveCheck = (
-      object: TSESTree.ObjectPattern,
-      type: TSESTree.TSTypeAnnotation,
-    ): void => {
-      const restElement = object.properties.find(
-        property => property.type === AST_NODE_TYPES.RestElement,
-      )
-      if (restElement) {
-        return
+    function checkDestructuredProperties(
+      objectPattern: TSESTree.ObjectPattern,
+      typeAnnotation: TSESTree.TSTypeAnnotation,
+      typeName: string,
+    ): void {
+      // Skip if rest element (...rest) is present — assumes it can catch anything
+      if (objectPattern.properties.some(p => p.type === AST_NODE_TYPES.RestElement)) {
+        return;
       }
 
-      if (
-        type.typeAnnotation.type === AST_NODE_TYPES.TSTypeReference &&
-        type.typeAnnotation.typeName.type === AST_NODE_TYPES.Identifier
-      ) {
-        const typeName = type.typeAnnotation.typeName.name
+      const destructuredKeys = new Set(
+        objectPattern.properties
+          .filter(isProperty)
+          .map(p => (p.key.type === AST_NODE_TYPES.Identifier ? p.key.name : null))
+          .filter((k): k is string => k !== null),
+      );
 
-        const typeDeclaration = context.sourceCode.ast.body
-          .map(getTypeAliasDeclaration)
-          .find(
-            (decl): decl is TSESTree.TSTypeAliasDeclaration =>
-              decl !== undefined && decl.id.name === typeName,
-          )
+      let members: TSESTree.TypeElement[] = [];
 
-        if (typeDeclaration) {
-          if (typeDeclaration.typeAnnotation.type !== AST_NODE_TYPES.TSTypeLiteral) {
-            return
+      if (typeAnnotation.typeAnnotation.type === AST_NODE_TYPES.TSTypeReference) {
+        const ref = typeAnnotation.typeAnnotation;
+        if (ref.typeName.type !== AST_NODE_TYPES.Identifier) return;
+
+        const decl = findTypeDeclaration(ref.typeName.name);
+        if (!decl) return;
+
+        if (decl.type === AST_NODE_TYPES.TSTypeAliasDeclaration) {
+          if (decl.typeAnnotation.type !== AST_NODE_TYPES.TSTypeLiteral) return;
+          members = decl.typeAnnotation.members;
+        } else if (decl.type === AST_NODE_TYPES.TSInterfaceDeclaration) {
+          members = decl.body.body;
+        }
+      } else if (typeAnnotation.typeAnnotation.type === AST_NODE_TYPES.TSTypeLiteral) {
+        members = typeAnnotation.typeAnnotation.members;
+      } else {
+        return;
+      }
+
+      for (const member of members) {
+        if (member.type !== AST_NODE_TYPES.TSPropertySignature) continue;
+        if (member.key.type !== AST_NODE_TYPES.Identifier) continue;
+
+        const propName = member.key.name;
+
+        // Skip if already destructured
+        if (destructuredKeys.has(propName)) {
+          // Optional: recurse into nested patterns
+          const matchingProp = objectPattern.properties.find(
+            p =>
+              isProperty(p) &&
+              p.key.type === AST_NODE_TYPES.Identifier &&
+              p.key.name === propName,
+          );
+
+          if (
+            matchingProp &&
+            matchingProp.value &&
+            matchingProp.value.type === AST_NODE_TYPES.ObjectPattern &&
+            member.typeAnnotation
+          ) {
+            checkDestructuredProperties(
+              matchingProp.value,
+              member.typeAnnotation,
+              `${typeName}.${propName}`,
+            );
           }
-          typeDeclaration.typeAnnotation.members.forEach(checkIfPropertyIsPresent(object, typeName))
-          return
+          continue;
         }
 
-        const interfaceDeclaration = context.sourceCode.ast.body
-          .map(getInterfaceDeclaration)
-          .find(
-            (decl): decl is TSESTree.TSInterfaceDeclaration =>
-              decl !== undefined && decl.id.name === typeName,
-          )
-
-        if (!interfaceDeclaration) {
-          return
-        }
-
-        interfaceDeclaration.body.body.forEach(checkIfPropertyIsPresent(object, typeName))
-
-        return
-      }
-
-      if (type.typeAnnotation.type === AST_NODE_TYPES.TSTypeLiteral) {
-        const inlineTypeName = context.sourceCode.getText(type.typeAnnotation)
-        type.typeAnnotation.members.forEach(checkIfPropertyIsPresent(object, inlineTypeName))
+        // Report the unused property
+        context.report({
+          node: objectPattern,
+          // Better: point roughly at the parameter location
+          // Could be improved further by locating the type reference node
+          messageId: 'unusedProperties',
+          data: {
+            propertyName: propName,
+            typeName,
+          },
+        });
       }
     }
 
-    const checkParameter = (paramObjectPattern: TSESTree.ObjectPattern): void => {
-      if (!paramObjectPattern.typeAnnotation) {
-        return
+    function checkParameter(param: TSESTree.Parameter): void {
+      if (param.type !== AST_NODE_TYPES.ObjectPattern) return;
+      if (!param.typeAnnotation) return;
+
+      const typeAnn = param.typeAnnotation;
+
+      let typeName = '(inline type)';
+
+      if (typeAnn.typeAnnotation.type === AST_NODE_TYPES.TSTypeReference) {
+        const typeNameNode = typeAnn.typeAnnotation.typeName;
+        if (typeNameNode.type === AST_NODE_TYPES.Identifier) {
+          typeName = typeNameNode.name;
+        }
       }
-      recursiveCheck(paramObjectPattern, paramObjectPattern.typeAnnotation)
+
+      checkDestructuredProperties(param, typeAnn, typeName);
     }
 
     return {
-      FunctionDeclaration(node: TSESTree.FunctionDeclaration) {
-        node.params.filter(isObjectPattern).forEach(checkParameter)
+      FunctionDeclaration(node) {
+        node.params.forEach(checkParameter);
       },
-
-      ArrowFunctionExpression(node: TSESTree.ArrowFunctionExpression) {
-        node.params.filter(isObjectPattern).forEach(checkParameter)
+      ArrowFunctionExpression(node) {
+        node.params.forEach(checkParameter);
       },
-
-      FunctionExpression(node: TSESTree.FunctionExpression) {
-        node.params.filter(isObjectPattern).forEach(checkParameter)
+      FunctionExpression(node) {
+        node.params.forEach(checkParameter);
       },
-    }
+      // Optional: add ObjectMethod, etc. if you want method params too
+    };
   },
-})
+});

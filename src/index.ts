@@ -5,7 +5,19 @@ export const rules = {
 }
 
 const plugin = {
-  rules,
+  meta: {
+    name: 'eslint-plugin-unused-type-properties',
+    version: '1.0.0',
+  },
+  rules: {
+    'no-unused-type-properties': noUnusedTypePropertiesRule, 
+  }
+} satisfies {
+  meta: {
+    name: string
+    version: string
+  }
+  rules: Record<string, typeof noUnusedTypePropertiesRule>
 }
 
 export default plugin
